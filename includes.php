@@ -305,7 +305,7 @@ function shell( $cmd ) : ?string {
 	return $error ? null : $process->getOutput();
 }
 
-function delete_wiki( string $wiki ) : int {
+function delete_wiki( string $wiki ) : ?string {
 	global $mysqli;
 
 	$wikiData = get_wiki_data( $wiki );
@@ -318,7 +318,7 @@ function delete_wiki( string $wiki ) : int {
 		'PATCHDEMO' => __DIR__,
 		'WIKI' => $wiki
 	], __DIR__ . '/deletewiki.sh' );
-	$error = shell_echo( $cmd );
+	$errorCode = shell_echo( $cmd );
 
 	foreach ( $wikiData['announcedTasks'] as $task ) {
 		// TODO: Deduplicate server/serverPath with variables in new.php
@@ -343,7 +343,7 @@ function delete_wiki( string $wiki ) : int {
 	$stmt->execute();
 	$stmt->close();
 
-	return $error;
+	return $errorCode ? 'Delete script failed.' : null;
 }
 
 $requestCache = [];
