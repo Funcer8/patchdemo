@@ -1,6 +1,8 @@
 #!/bin/bash
 set -ex
 
+PATH=$EXTRA_PATH:$PATH
+
 # run update script (#166, #244)
 php $PATCHDEMO/wikis/$NAME/w/maintenance/update.php --quick
 
@@ -26,6 +28,19 @@ for sql in $(find $PATCHDEMO/sql-perwiki -name "*.sql" -not -type d -printf '%P\
 do
 	mysql -u patchdemo -ppatchdemo patchdemo_$NAME < $PATCHDEMO/sql-perwiki/$sql
 done
+
+# OOUI build
+if [ -d $PATCHDEMO/wikis/$NAME/w/build/ooui ]; then
+	cd $PATCHDEMO/wikis/$NAME/w/build/ooui
+	npm install
+	npm x grunt build
+	cd $PATCHDEMO
+	# JS & CSS
+	cp -r $PATCHDEMO/wikis/$NAME/w/build/ooui/dist/* $PATCHDEMO/wikis/$NAME/w/resources/lib/ooui/
+	# PHP
+	cp -r $PATCHDEMO/wikis/$NAME/w/build/ooui/php/*  $PATCHDEMO/wikis/$NAME/w/vendor/oojs/oojs-ui/php/
+	cp -r $PATCHDEMO/wikis/$NAME/w/build/ooui/i18n/* $PATCHDEMO/wikis/$NAME/w/vendor/oojs/oojs-ui/i18n/
+fi
 
 # grant FlaggedRevs editor rights to the default account
 if [ -d $PATCHDEMO/wikis/$NAME/w/extensions/FlaggedRevs ]; then
