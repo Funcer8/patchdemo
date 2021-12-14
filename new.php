@@ -4,140 +4,42 @@ use Symfony\Component\Yaml\Yaml;
 
 require_once "includes.php";
 
-include "header.php";
-
-ob_implicit_flush( true );
-
-if ( $useOAuth && !$user ) {
-	echo oauth_signin_prompt();
-	die();
-}
-
-if ( !isset( $_POST['csrf_token'] ) || !check_csrf_token( $_POST['csrf_token'] ) ) {
-	die( "Invalid session." );
+if ( !is_cli() ) {
+	die( 'Must be run from the command line.' );
 }
 
 $startTime = time();
 
-$branch = trim( $_POST['branch'] );
-$patches = trim( $_POST['patches'] );
-$announce = !empty( $_POST['announce'] );
-$language = trim( $_POST['language'] );
+$branch = trim( getenv( 'branch' ) );
+$patches = trim( getenv( 'patches' ) );
+$announce = !empty( getenv( 'announce' ) );
+$language = trim( getenv( 'language' ) );
 
-$namePath = substr( md5( $branch . $patches . time() ), 0, 10 );
-$server = detectProtocol() . '://' . $_SERVER['HTTP_HOST'];
-$serverPath = preg_replace( '`/[^/]*$`', '', $_SERVER['REQUEST_URI'] );
+$wiki = getenv( 'wiki' );
+$server = getenv( 'server' );
+$serverPath = getenv( 'serverPath' );
 
-$branchDesc = preg_replace( '/^origin\//', '', $branch );
-
-$creator = $user ? $user->username : '';
-$created = time();
-
-/**
- * Check if the user has dropped their connection and delete the wiki if so
- *
- * We could check for dropped connections with register_shutdown_function(), but
- * that could happen in the middle of a shell command. If we tried to delete
- * a wiki while a shell command was running (e.g composer update) we may still
- * be left with stray files (e.g. /vendor)
- *
- * Instead manually check the connection at 'safe' times in between API requests
- * or shell commands.
- */
-function check_connection() {
-	if ( connection_status() !== CONNECTION_NORMAL ) {
-		abandon( 'User disconnected early' );
-	}
-}
-
-// Don't kill the process automatcally
-ignore_user_abort( true );
-
-// Create an entry for the wiki before we have resolved patches.
-// Will be updated later.
-insert_wiki_data( $namePath, $creator, $created, $branchDesc );
+$creator = getenv( 'creator' );
+$branchDesc = getenv( 'branchDesc' );
 
 function abandon( string $errHtml ) {
-	global $namePath;
+	global $wiki, $server, $serverPath;
+
+	echo '<p>' . $errHtml . '</p>';
 	$errJson = json_encode( $errHtml );
-	echo <<<EOT
-		<script>
-			pd.installProgressField.fieldWidget.setDisabled( true );
-			pd.installProgressField.fieldWidget.popPending();
-			pd.installProgressField.setErrors( [ new OO.ui.HtmlSnippet( $errJson ) ] );
-			pd.notify( 'Your PatchDemo wiki failed to build', $errJson );
-		</script>
-EOT;
-	delete_wiki( $namePath );
-	die( $errHtml );
+	echo "<script>pd.abandon( $errJson );</script>";
+
+	// Don't delete the log immediately so it can be sent to the client
+	sleep( 2 );
+	delete_wiki_cli_safe( $wiki, $server . $serverPath );
+	die();
 }
 
 function set_progress( float $pc, string $label ) {
 	echo '<p>' . htmlspecialchars( $label ) . '</p>';
 	$labelJson = json_encode( $label );
-	echo <<<EOT
-		<script>
-			pd.installProgressField.fieldWidget.setProgress( $pc );
-			pd.installProgressField.setLabel( $labelJson );
-		</script>
-EOT;
-	if ( (int)$pc === 100 ) {
-		echo <<<EOT
-		<script>
-			pd.installProgressField.fieldWidget.popPending();
-			pd.openWiki.setDisabled( false );
-			pd.notify( 'Your PatchDemo wiki is ready!' );
-		</script>
-EOT;
-	}
-
-	ob_flush();
+	echo "<script>pd.setProgress( $pc, $labelJson );</script>";
 }
-
-echo new OOUI\FieldsetLayout( [
-	'label' => null,
-	'classes' => [ 'installForm' ],
-	'items' => [
-		new OOUI\FieldLayout(
-			new OOUI\ProgressBarWidget(),
-			[
-				'align' => 'top',
-				'label' => 'Installing...',
-				'classes' => [ 'installProgressField' ],
-				'infusable' => true,
-			]
-		),
-		new OOUI\FieldLayout(
-			new OOUI\ButtonWidget( [
-				'label' => 'Open wiki',
-				'flags' => [ 'progressive', 'primary' ],
-				'href' => "wikis/$namePath/w/",
-				'disabled' => true,
-				'classes' => [ 'openWiki' ],
-				'infusable' => true,
-			] ),
-			[
-				'align' => 'inline',
-				'classes' => [ 'openWikiField' ],
-				'label' => "When complete, use this button to open your wiki ($namePath)",
-				'help' => new OOUI\HtmlSnippet( <<<EOT
-					You can log in as the following users using the password <code>patchdemo1</code>
-					<ul class="userList">
-						<li><code>Patch Demo</code> <em>(admin)</em></li>
-						<li><code>Alice</code></li>
-						<li><code>Bob</code></li>
-						<li><code>Mallory</code> <em>(blocked)</em></li>
-					</ul>
-				EOT ),
-				'helpInline' => true,
-			]
-		),
-	]
-] );
-
-echo '<script src="' . $basePath . '/js/new.js"></script>';
-
-echo '<div class="consoleLog">';
 
 if ( $patches ) {
 	$patches = array_map( 'trim', preg_split( "/\n|\|/", $patches ) );
@@ -173,7 +75,6 @@ foreach ( $patches as &$patch ) {
 		$o = 'CURRENT_REVISION';
 	}
 	$data = gerrit_query( "changes/?q=change:$query&o=LABELS&o=$o", true );
-	check_connection();
 
 	if ( count( $data ) === 0 ) {
 		$patch = htmlentities( $patch );
@@ -219,7 +120,6 @@ foreach ( $patches as &$patch ) {
 		// The patch doesn't have V+2, check if the uploader is trusted
 		$uploaderId = $data[0]['revisions'][$revision]['uploader']['_account_id'];
 		$uploader = gerrit_query( 'accounts/' . $uploaderId, true );
-		check_connection();
 		if ( !is_trusted_user( $uploader['email'] ) ) {
 			abandon( "Patch must be approved (Verified+2) by jenkins-bot, or uploaded by a trusted user" );
 		}
@@ -242,7 +142,6 @@ foreach ( $patches as &$patch ) {
 
 	// Look at all commits in this patch's tree for cross-repo dependencies to add
 	$data = gerrit_query( "changes/$id/revisions/$revision/related", true );
-	check_connection();
 	// Ancestor commits only, not descendants
 	$foundCurr = false;
 	foreach ( $data['changes'] as $change ) {
@@ -255,7 +154,6 @@ foreach ( $patches as &$patch ) {
 
 	foreach ( $relatedChanges as [ $c, $r ] ) {
 		$data = gerrit_query( "changes/$c/revisions/$r/commit", true );
-		check_connection();
 
 		preg_match_all( '/^Depends-On: (.+)$/m', $data['message'], $m );
 		foreach ( $m[1] as $changeid ) {
@@ -275,7 +173,7 @@ $wikiName = "Patch demo (" . trim(
 ) . ")";
 
 // Update DB record with patches applied
-wiki_add_patches( $namePath, $patchesApplied );
+wiki_add_patches( $wiki, $patchesApplied );
 
 $mainPage = "This wiki was generated on [$server$serverPath '''Patch demo'''] at ~~~~~.
 
@@ -290,7 +188,6 @@ foreach ( $patchesApplied as $patch ) {
 	list( $t, $r, $p ) = $matches;
 
 	$data = gerrit_query( "changes/$r/revisions/$p/commit", true );
-	check_connection();
 	if ( $data ) {
 		$t = $t . ': ' . $data[ 'subject' ];
 		get_linked_tasks( $data['message'], $linkedTasks );
@@ -312,13 +209,13 @@ foreach ( $linkedTasks as $task ) {
 // Choose repositories to enable
 $repos = get_repo_data();
 
-$useProxy = !empty( $_POST['proxy'] );
-$useInstantCommons = !empty( $_POST['instantCommons' ] );
+$useProxy = !empty( getenv( 'proxy' ) );
+$useInstantCommons = !empty( getenv( 'instantCommons' ) );
 
-if ( $_POST['preset'] === 'custom' ) {
-	$allowedRepos = $_POST['repos'];
+if ( getenv( 'preset' ) === 'custom' ) {
+	$allowedRepos = explode( '|', getenv( 'repos' ) );
 } else {
-	$allowedRepos = get_repo_presets()[ $_POST['preset'] ];
+	$allowedRepos = get_repo_presets()[ getenv( 'preset' ) ];
 }
 
 // When proxying, always enable MobileFrontend and its content provider
@@ -345,7 +242,7 @@ $reposString = implode( "\n", array_map( static function ( $k, $v ) {
 
 $baseEnv = [
 	'PATCHDEMO' => __DIR__,
-	'NAME' => $namePath,
+	'NAME' => $wiki,
 ];
 
 $start = 5;
@@ -357,7 +254,6 @@ $repoCount = count( $repos );
 foreach ( $repos as $source => $target ) {
 	set_progress( $repoProgress, "Updating repositories ($n/$repoCount)..." );
 
-	check_connection();
 	$error = shell_echo( __DIR__ . '/new/updaterepos.sh',
 		$baseEnv + [
 			'REPO_SOURCE' => $source,
@@ -373,7 +269,6 @@ foreach ( $repos as $source => $target ) {
 }
 
 // Just creates empty folders so no need for progress update
-check_connection();
 $error = shell_echo( __DIR__ . '/new/precheckout.sh', $baseEnv );
 if ( $error ) {
 	abandon( "Could not create directories for wiki" );
@@ -387,7 +282,6 @@ $repoCount = count( $repos );
 foreach ( $repos as $source => $target ) {
 	set_progress( $repoProgress, "Checking out repositories ($n/$repoCount)..." );
 
-	check_connection();
 	$error = shell_echo( __DIR__ . '/new/checkout.sh',
 		$baseEnv + [
 		'BRANCH' => $branch,
@@ -405,7 +299,6 @@ foreach ( $repos as $source => $target ) {
 
 // TODO: Make this a loop
 set_progress( 60, 'Fetching submodules...' );
-check_connection();
 $error = shell_echo( __DIR__ . '/new/submodules.sh', $baseEnv );
 if ( $error ) {
 	abandon( "Could not fetch submodules" );
@@ -426,7 +319,6 @@ $repoCount = count( $composerInstallRepos );
 foreach ( $composerInstallRepos as $i => $repo ) {
 	$n = $i + 1;
 	set_progress( $repoProgress, "Fetching dependencies ($n/$repoCount)..." );
-	check_connection();
 	$error = shell_echo( __DIR__ . '/new/composerinstall.sh',
 		$baseEnv + [
 			// Variable used by composer itself, not our script
@@ -443,7 +335,6 @@ foreach ( $composerInstallRepos as $i => $repo ) {
 
 set_progress( 65, 'Installing your wiki...' );
 
-check_connection();
 $error = shell_echo( __DIR__ . '/new/install.sh',
 	$baseEnv + [
 		'WIKINAME' => $wikiName,
@@ -464,7 +355,6 @@ $count = count( $commands );
 foreach ( $commands as $i => $command ) {
 	$n = $i + 1;
 	set_progress( $progress, "Fetching and applying patches ($n/$count)..." );
-	check_connection();
 	$error = shell_echo( $command[1], $baseEnv + $command[0] );
 	if ( $error ) {
 		abandon( "Could not apply patch {$patchesApplied[$i]}" );
@@ -474,7 +364,6 @@ foreach ( $commands as $i => $command ) {
 
 set_progress( 90, 'Setting up wiki content...' );
 
-check_connection();
 $error = shell_echo( __DIR__ . '/new/postinstall.sh',
 	$baseEnv + [
 		'MAINPAGE' => $mainPage,
@@ -495,15 +384,13 @@ if ( $announce && count( $linkedTasks ) ) {
 			'T' . $task,
 			"Test wiki **created** on [[ $server$serverPath | Patch demo ]]" . ( $creator ? ' by ' . $creator : '' ) . " using patch(es) linked to this task:\n" .
 			"\n" .
-			"$server$serverPath/wikis/$namePath/w/"
+			"$server$serverPath/wikis/$wiki/w/"
 		);
 	}
-	wiki_add_announced_tasks( $namePath, $linkedTasks );
+	wiki_add_announced_tasks( $wiki, $linkedTasks );
 }
 
 $timeToCreate = time() - $startTime;
-wiki_set_time_to_create( $namePath, $timeToCreate );
+wiki_set_time_to_create( $wiki, $timeToCreate );
 
 set_progress( 100, 'All done! Wiki created in ' . $timeToCreate . 's.' );
-
-echo '</div>';

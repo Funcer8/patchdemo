@@ -56,7 +56,7 @@ if ( $useOAuth && !$user ) {
 	echo new OOUI\FormLayout( [
 		'infusable' => true,
 		'method' => 'POST',
-		'action' => 'new.php',
+		'action' => 'start.php',
 		'id' => 'new-form',
 		'items' => [
 			new OOUI\FieldsetLayout( [
@@ -311,7 +311,10 @@ while ( $data = $results->fetch_assoc() ) {
 		'<td data-label="Linked tasks" class="linkedTasks">' . $linkedTasks . '</td>' .
 		'<td data-label="Time" class="date">' . date( 'Y-m-d H:i:s', $wikiData[ 'created' ] ) . '</td>' .
 		( $useOAuth ? '<td data-label="Creator">' . ( $creator ? user_link( $creator ) : '?' ) . '</td>' : '' ) .
-		( $canAdmin ? '<td data-label="Time to create">' . ( $wikiData['timeToCreate'] ? $wikiData['timeToCreate'] . 's' : '' ) . '</td>' : '' ) .
+		( $canAdmin ?
+			'<td data-label="Time to create"><a href="start.php?wiki=' . $wiki . '">' . ( $wikiData['timeToCreate'] ? $wikiData['timeToCreate'] . 's' : '' ) . '</a></td>' :
+			''
+		) .
 		( $canDelete ?
 			'<td data-label="Actions"><a href="delete.php?wiki=' . $wiki . '">Delete</a></td>' :
 			'<!-- EMPTY ACTIONS -->'
